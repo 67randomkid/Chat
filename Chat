@@ -1,22 +1,11 @@
 -- Đảm bảo UI không bị trùng lặp khi chạy lại script
 local CoreGui = game:GetService("CoreGui")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local localPlayer = Players.LocalPlayer
+local TextChatService = game:GetService("TextChatService")
 
 if CoreGui:FindFirstChild("CustomChatExecutorUI") then
     CoreGui.CustomChatExecutorUI:Destroy()
-end
-
--- Tạo hoặc lấy RemoteEvent để đồng bộ tin nhắn giữa các máy qua Server
-local RemoteEvent = ReplicatedStorage:FindFirstChild("CustomChatSyncEvent")
-if not RemoteEvent and game:GetService("RunService"):IsServer() then
-    RemoteEvent = Instance.new("RemoteEvent")
-    RemoteEvent.Name = "CustomChatSyncEvent"
-    RemoteEvent.Parent = ReplicatedStorage
-elseif not RemoteEvent then
-    -- Đợi server tạo event nếu chạy ở client
-    RemoteEvent = ReplicatedStorage:WaitForChild("CustomChatSyncEvent", 5)
 end
 
 -- Tạo ScreenGui chính
@@ -139,7 +128,7 @@ ToggleButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- 8. Hàm hiển thị tin nhắn lên màn hình (Hỗ trợ nhận từ máy khác)
+-- 8. Hàm hiển thị tin nhắn lên bảng UI tùy chỉnh
 local function DisplayMessage(senderName, text)
     local NewMsg = Instance.new("TextLabel")
     NewMsg.Parent = MessageScroll
@@ -160,28 +149,54 @@ local function DisplayMessage(senderName, text)
     MessageScroll.CanvasPosition = Vector2.new(0, MessageScroll.CanvasSize.Y)
 end
 
--- Lắng nghe tín hiệu đồng bộ từ Server gửi về cho tất cả các máy
-if RemoteEvent then
-    RemoteEvent.OnClientEvent:Connect(function(senderName, text)
-        DisplayMessage(senderName, text)
-    end)
-end
-
--- 9. Gửi tin nhắn đi
+-- 9. Cơ chế đồng bộ thật qua kênh hệ thống chung của Roblox
 local function SendMessage()
-    if InputBox.Text ~= "" and RemoteEvent then
-        local text = InputBox.Text
+    local text = InputBox.Text
+    if text ~= "" then
         InputBox.Text = ""
-        -- Gửi nội dung lên Server để Server phát tín hiệu đồng bộ cho mọi người trong game
-        RemoteEvent:FireServer(text)
+        pcall(function()
+            -- Gửi qua kênh chat mặc định của Roblox để Server tự phát đi các máy
+            if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+                local channel = TextChatService.TextChannels.RBXGeneral
+                if channel then
+                    channel:SendAsync(text)
+                end
+            else
+                game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents"):FindFirstChild("SayMessageRequest"):FireServer(text, "All")
+            end
+        end)
     end
 end
 
 SendButton.MouseButton1Click:Connect(SendMessage)
-
 InputBox.FocusLost:Connect(function(enterPressed)
     if enterPressed then
         SendMessage()
+    end
+end)
+
+-- Lắng nghe tin nhắn từ hệ thống trò chuyện chung của game để hiển thị lên bảng UI của bạn
+pcall(function()
+    if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+        TextChatService.MessageReceived:Connect(function(messageData)
+            if messageData.TextSource then
+                local sender = Players:GetPlayerByUserId(messageData.TextSource.UserId)
+                if sender then
+                    DisplayMessage(sender.Name, messageData.Text)
+                end
+            end
+        end)
+    else
+        for _, player in ipairs(Players:GetPlayers()) do
+            player.Chatted:Connect(function(msg)
+                DisplayMessage(player.Name, msg)
+            end)
+        end
+        Players.PlayerAdded:Connect(function(player)
+            player.Chatted:Connect(function(msg)
+                DisplayMessage(player.Name, msg)
+            end)
+        end)
     end
 end)
 
@@ -236,24 +251,3 @@ end
 
 MakeDraggable(ToggleButton, true)
 MakeDraggable(DragBar, false)
-
--- PHẦN XỬ LÝ SERVER (Tự động tạo bộ lọc xử lý mạng nếu chạy bằng executor có hỗ trợ Server Script hoặc tự động xử lý an toàn)
-task.spawn(function()
-    pcall(function()
-        if game:GetService("RunService") and not game:GetService("RunService"):IsStudio() then
-            -- Đoạn này giúp tự động tạo kết nối nhận lệnh trên server nếu executor cho phép
-            local serverScript = [[
-                local ReplicatedStorage = game:GetService("ReplicatedStorage")
-                local RemoteEvent = ReplicatedStorage:FindFirstChild("CustomChatSyncEvent")
-                if RemoteEvent then
-                    RemoteEvent.OnServerEvent:Connect(function(player, text)
-                        if type(text) == "string" and text ~= "" and #text <= 200 then
-                            RemoteEvent:FireAllClients(player.Name, text)
-                        end
-                    end)
-                end
-            ]]
-            -- Lưu ý: Nếu executor của bạn chỉ chạy ở Client (LocalScript), bạn cần đảm bảo game đã có sẵn một Server Script nhận sự kiện này, hoặc dùng chung hệ thống chat mặc định.
-        end
-    end)
-end)
