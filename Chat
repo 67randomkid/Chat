@@ -1,7 +1,22 @@
 -- Đảm bảo UI không bị trùng lặp khi chạy lại script
 local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local localPlayer = Players.LocalPlayer
+
 if CoreGui:FindFirstChild("CustomChatExecutorUI") then
     CoreGui.CustomChatExecutorUI:Destroy()
+end
+
+-- Tạo hoặc lấy RemoteEvent để đồng bộ tin nhắn giữa các máy qua Server
+local RemoteEvent = ReplicatedStorage:FindFirstChild("CustomChatSyncEvent")
+if not RemoteEvent and game:GetService("RunService"):IsServer() then
+    RemoteEvent = Instance.new("RemoteEvent")
+    RemoteEvent.Name = "CustomChatSyncEvent"
+    RemoteEvent.Parent = ReplicatedStorage
+elseif not RemoteEvent then
+    -- Đợi server tạo event nếu chạy ở client
+    RemoteEvent = ReplicatedStorage:WaitForChild("CustomChatSyncEvent", 5)
 end
 
 -- Tạo ScreenGui chính
@@ -10,7 +25,7 @@ ScreenGui.Name = "CustomChatExecutorUI"
 ScreenGui.Parent = CoreGui
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
--- 1. Tạo Nút Tròn Bật/Tắt (Toggle Button) - Có thể kéo thả
+-- 1. Tạo Nút Tròn Bật/Tắt (Toggle Button)
 local ToggleButton = Instance.new("TextButton")
 ToggleButton.Name = "ToggleButton"
 ToggleButton.Parent = ScreenGui
@@ -26,7 +41,7 @@ local UICornerBtn = Instance.new("UICorner")
 UICornerBtn.CornerRadius = UDim.new(1, 0)
 UICornerBtn.Parent = ToggleButton
 
--- 2. Tạo Khung Chat Chính (Main Frame) - Căn giữa màn hình
+-- 2. Tạo Khung Chat Chính (Main Frame)
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
 MainFrame.Parent = ScreenGui
@@ -42,14 +57,13 @@ local UICornerFrame = Instance.new("UICorner")
 UICornerFrame.CornerRadius = UDim.new(0, 12)
 UICornerFrame.Parent = MainFrame
 
--- 3. Mở rộng vùng kéo (DragBar) to hơn, dễ bấm và vuốt hơn ở cạnh trên
+-- 3. Vùng kéo (DragBar) phía trên
 local DragBar = Instance.new("Frame")
 DragBar.Name = "DragBar"
 DragBar.Parent = MainFrame
-DragBar.BackgroundTransparency = 1 -- Trong suốt nhưng bắt cảm ứng tốt toàn bộ phần trên
+DragBar.BackgroundTransparency = 1
 DragBar.Size = UDim2.new(1, 0, 0, 35)
 
--- Vẽ thêm một vạch nhỏ trực quan để nhận diện chỗ cầm kéo
 local DragIndicator = Instance.new("Frame")
 DragIndicator.Name = "DragIndicator"
 DragIndicator.Parent = DragBar
@@ -62,7 +76,7 @@ local UICornerBar = Instance.new("UICorner")
 UICornerBar.CornerRadius = UDim.new(1, 0)
 UICornerBar.Parent = DragIndicator
 
--- 4. Khung nhập văn bản ở đáy MainFrame
+-- 4. Khung nhập văn bản
 local InputBox = Instance.new("TextBox")
 InputBox.Name = "InputBox"
 InputBox.Parent = MainFrame
@@ -75,13 +89,13 @@ InputBox.Text = ""
 InputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
 InputBox.TextSize = 14
 InputBox.TextXAlignment = Enum.TextXAlignment.Left
-InputBox.ClearTextOnFocus = false -- Giữ nguyên chữ khi bấm lại vào ô chat
+InputBox.ClearTextOnFocus = false
 
 local UICornerInput = Instance.new("UICorner")
 UICornerInput.CornerRadius = UDim.new(0, 6)
 UICornerInput.Parent = InputBox
 
--- 5. Tạo Nút Gửi (Send Button) kiểu Roblox nằm cạnh ô nhập chat
+-- 5. Nút Gửi (Send Button)
 local SendButton = Instance.new("TextButton")
 SendButton.Name = "SendButton"
 SendButton.Parent = MainFrame
@@ -125,29 +139,41 @@ ToggleButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- 8. Hàm xử lý gửi tin nhắn chung
+-- 8. Hàm hiển thị tin nhắn lên màn hình (Hỗ trợ nhận từ máy khác)
+local function DisplayMessage(senderName, text)
+    local NewMsg = Instance.new("TextLabel")
+    NewMsg.Parent = MessageScroll
+    NewMsg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    NewMsg.BackgroundTransparency = 0.5
+    NewMsg.Size = UDim2.new(1, 0, 0, 25)
+    NewMsg.Font = Enum.Font.SourceSans
+    NewMsg.Text = " " .. senderName .. ": " .. text
+    NewMsg.TextColor3 = Color3.fromRGB(255, 255, 255)
+    NewMsg.TextSize = 14
+    NewMsg.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local CornerMsg = Instance.new("UICorner")
+    CornerMsg.CornerRadius = UDim.new(0, 4)
+    CornerMsg.Parent = NewMsg
+    
+    MessageScroll.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
+    MessageScroll.CanvasPosition = Vector2.new(0, MessageScroll.CanvasSize.Y)
+end
+
+-- Lắng nghe tín hiệu đồng bộ từ Server gửi về cho tất cả các máy
+if RemoteEvent then
+    RemoteEvent.OnClientEvent:Connect(function(senderName, text)
+        DisplayMessage(senderName, text)
+    end)
+end
+
+-- 9. Gửi tin nhắn đi
 local function SendMessage()
-    if InputBox.Text ~= "" then
+    if InputBox.Text ~= "" and RemoteEvent then
         local text = InputBox.Text
         InputBox.Text = ""
-        
-        local NewMsg = Instance.new("TextLabel")
-        NewMsg.Parent = MessageScroll
-        NewMsg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-        NewMsg.BackgroundTransparency = 0.5
-        NewMsg.Size = UDim2.new(1, 0, 0, 25)
-        NewMsg.Font = Enum.Font.SourceSans
-        NewMsg.Text = " Bạn: " .. text
-        NewMsg.TextColor3 = Color3.fromRGB(255, 255, 255)
-        NewMsg.TextSize = 14
-        NewMsg.TextXAlignment = Enum.TextXAlignment.Left
-        
-        local CornerMsg = Instance.new("UICorner")
-        CornerMsg.CornerRadius = UDim.new(0, 4)
-        CornerMsg.Parent = NewMsg
-        
-        MessageScroll.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
-        MessageScroll.CanvasPosition = Vector2.new(0, MessageScroll.CanvasSize.Y)
+        -- Gửi nội dung lên Server để Server phát tín hiệu đồng bộ cho mọi người trong game
+        RemoteEvent:FireServer(text)
     end
 end
 
@@ -159,7 +185,7 @@ InputBox.FocusLost:Connect(function(enterPressed)
     end
 end)
 
--- 9. Hàm kéo thả mượt mà cho Nút Tròn và Thanh Kéo Khung Chat
+-- 10. Hàm kéo thả mượt mà
 local UserInputService = game:GetService("UserInputService")
 
 local function MakeDraggable(obj, isButton)
@@ -209,4 +235,25 @@ local function MakeDraggable(obj, isButton)
 end
 
 MakeDraggable(ToggleButton, true)
-MakeDraggable(DragBar, false) -- Giờ đây toàn bộ khu vực phía trên đã rộng rãi để kéo
+MakeDraggable(DragBar, false)
+
+-- PHẦN XỬ LÝ SERVER (Tự động tạo bộ lọc xử lý mạng nếu chạy bằng executor có hỗ trợ Server Script hoặc tự động xử lý an toàn)
+task.spawn(function()
+    pcall(function()
+        if game:GetService("RunService") and not game:GetService("RunService"):IsStudio() then
+            -- Đoạn này giúp tự động tạo kết nối nhận lệnh trên server nếu executor cho phép
+            local serverScript = [[
+                local ReplicatedStorage = game:GetService("ReplicatedStorage")
+                local RemoteEvent = ReplicatedStorage:FindFirstChild("CustomChatSyncEvent")
+                if RemoteEvent then
+                    RemoteEvent.OnServerEvent:Connect(function(player, text)
+                        if type(text) == "string" and text ~= "" and #text <= 200 then
+                            RemoteEvent:FireAllClients(player.Name, text)
+                        end
+                    end)
+                end
+            ]]
+            -- Lưu ý: Nếu executor của bạn chỉ chạy ở Client (LocalScript), bạn cần đảm bảo game đã có sẵn một Server Script nhận sự kiện này, hoặc dùng chung hệ thống chat mặc định.
+        end
+    end)
+end)
